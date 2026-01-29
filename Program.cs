@@ -37,30 +37,57 @@ if (!Uri.TryCreate(origin,UriKind.Absolute, out Uri? originUri))
 }
 
 
-StartServer(portNumber);
+await StartServerAsync(portNumber, originUri);
 
-void StartServer(int port)
+async Task StartServerAsync(int port, Uri origin)
 {
     var listener = new HttpListener();
     listener.Prefixes.Add($"http://localhost:{port}/");
-
     listener.Start();
+
     Console.WriteLine($"Listening on http://localhost:{port}/");
+    Console.WriteLine($"Forwarding to {origin}");
+
+    var HttpClient = new HttpClient();
 
     while (true)
     {
-        var context = listener.GetContext();
-        var response = context.Response;
-
-        string responseText = "hello";
-        byte[] buffer = Encoding.UTF8.GetBytes(responseText);
-        
-        response.ContentLength64 = buffer.Length;
-        response.OutputStream.Write(buffer, 0, buffer.Length);
-        response.OutputStream.Close();
+        var context = await listener.GetContextAsync();
+        _ = HandleRequestAsync(context ,HttpClient ,origin );
     }
 }
+async Task HandleRequestAsync(HttpListenerContext context, HttpClient htppClient, Uri origin)
+{
+    var request = context.Request;
+    var response = context.Response;
 
+    if (request.HttpMethod != "GET")
+    {
+        response.StatusCode = (int)HttpStatusCode.MethodNotAllowed;
+        response.Close();
+        return;
+    }
 
+    var targetUrl = new Uri(origin, request.RawUrl);
 
+    HttpResponseMessage originResponse;
+    try
+    {
+        originResponse = await htppClient.GetAsync(targetUrl);
+    }
+    catch
+    {
+        response.StatusCode = (int)HttpStatusCode.BadGateway;
+        response.Close();
+        return;
+    }
+
+    var responseBody = await originResponse.Content.ReadAsByteArrayAsync();
+
+    response.StatusCode = (int)originResponse.StatusCode;
+    response.ContentLength64 = responseBody.Length;
+
+    await response.OutputStream.WriteAsync(responseBody, 0, responseBody.Length);
+    response.OutputStream.Close();
+}
 
