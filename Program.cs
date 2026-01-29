@@ -1,4 +1,6 @@
-﻿
+﻿using System.Net;
+using System.Text;
+
 string? port = null;
 string? origin = null;
 
@@ -35,9 +37,30 @@ if (!Uri.TryCreate(origin,UriKind.Absolute, out Uri? originUri))
 }
 
 
+StartServer(portNumber);
 
-Console.WriteLine($"Port: {port}");
-Console.WriteLine($"Orgin: {origin}");
+void StartServer(int port)
+{
+    var listener = new HttpListener();
+    listener.Prefixes.Add($"http://localhost:{port}/");
+
+    listener.Start();
+    Console.WriteLine($"Listening on http://localhost:{port}/");
+
+    while (true)
+    {
+        var context = listener.GetContext();
+        var response = context.Response;
+
+        string responseText = "hello";
+        byte[] buffer = Encoding.UTF8.GetBytes(responseText);
+        
+        response.ContentLength64 = buffer.Length;
+        response.OutputStream.Write(buffer, 0, buffer.Length);
+        response.OutputStream.Close();
+    }
+}
+
 
 
 
