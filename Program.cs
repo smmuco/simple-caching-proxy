@@ -1,9 +1,10 @@
-﻿using System.Net;
+﻿using System.Collections.Concurrent;
+using System.Net;
 using System.Text;
 
 string? port = null;
 string? origin = null;
-
+bool clearCache = false;
 
 for (int i = 0; i<args.Length; i++)
 {
@@ -11,9 +12,13 @@ for (int i = 0; i<args.Length; i++)
     {
         port = args[i + 1];
     }
-    else if(args[i] == "--origin" && i + 1 < args.Length)
+    if(args[i] == "--origin" && i + 1 < args.Length)
     {
         origin = args[i + 1];
+    }
+    if (args[i] == "--clear-cache")
+    {
+        clearCache = true;
     }
 }
 
@@ -36,6 +41,15 @@ if (!Uri.TryCreate(origin,UriKind.Absolute, out Uri? originUri))
     Environment.Exit(1);
 }
 
+var cache = new ConcurrentDictionary<string, CachedResponse>();
+
+
+if (clearCache)
+{
+    cache.Clear();
+    Console.WriteLine("Cache cleared");
+}
+
 
 await StartServerAsync(portNumber, originUri);
 
@@ -49,14 +63,15 @@ async Task StartServerAsync(int port, Uri origin)
     Console.WriteLine($"Forwarding to {origin}");
 
     var HttpClient = new HttpClient();
-
+    
     while (true)
     {
         var context = await listener.GetContextAsync();
-        _ = HandleRequestAsync(context ,HttpClient ,origin );
+        _ = HandleRequestAsync(context ,HttpClient ,origin, cache );
     }
 }
-async Task HandleRequestAsync(HttpListenerContext context, HttpClient htppClient, Uri origin)
+
+async Task HandleRequestAsync(HttpListenerContext context, HttpClient htppClient, Uri origin, ConcurrentDictionary<string, CachedResponse> cache)
 {
     var request = context.Request;
     var response = context.Response;
@@ -67,6 +82,19 @@ async Task HandleRequestAsync(HttpListenerContext context, HttpClient htppClient
         response.Close();
         return;
     }
+
+    var cacheKey = $"{request.HttpMethod}{request.RawUrl}";
+
+    if (cache.TryGetValue(cacheKey, out var cached))
+    {
+        response.Headers.Add("X-Cache", "HIT");
+        response.StatusCode = cached.StatusCode;
+        response.ContentLength64 = cached.Body.Length;
+        await response.OutputStream.WriteAsync(cached.Body, 0, cached.Body.Length);
+        response.OutputStream.Close();
+        return;
+    }
+
 
     var targetUrl = new Uri(origin, request.RawUrl);
 
@@ -84,10 +112,25 @@ async Task HandleRequestAsync(HttpListenerContext context, HttpClient htppClient
 
     var responseBody = await originResponse.Content.ReadAsByteArrayAsync();
 
-    response.StatusCode = (int)originResponse.StatusCode;
+
+    var cachedResponse = new CachedResponse
+    {
+        StatusCode = (int)originResponse.StatusCode,
+        Body = responseBody
+    };
+
+    cache[cacheKey] = cachedResponse;
+
+    response.StatusCode = cachedResponse.StatusCode;
+    response.Headers.Add("X-Cache", "MISS");
     response.ContentLength64 = responseBody.Length;
 
     await response.OutputStream.WriteAsync(responseBody, 0, responseBody.Length);
     response.OutputStream.Close();
 }
 
+class CachedResponse
+{
+    public int StatusCode { get; set; }
+    public byte[] Body { get; set; } = Array.Empty<byte>();
+}
